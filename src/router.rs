@@ -1,17 +1,17 @@
 use crate::backend::GenericSocketBackend;
-use crate::codec::*;
 use crate::endpoint::Endpoint;
 use crate::error::{ZmqError, ZmqResult};
 use crate::fair_queue::FairQueue;
 use crate::message::*;
 use crate::transport::AcceptStopHandle;
 use crate::util::PeerIdentity;
+use crate::{async_rt, codec::*};
 use crate::{MultiPeerBackend, SocketEvent, SocketOptions, SocketRecv, SocketSend, SocketType};
 use crate::{Socket, SocketBackend};
 
 use async_trait::async_trait;
 use futures::channel::mpsc;
-use futures::{SinkExt, StreamExt};
+use futures::{io, SinkExt, StreamExt};
 
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -100,6 +100,34 @@ impl SocketSend for RouterSocket {
                 Ok(())
             }
             None => Err(ZmqError::Other("Destination client not found by identity")),
+        }
+    }
+}
+
+impl RouterSocket {
+    pub async fn send_with_timeout(
+        &mut self,
+        mut message: ZmqMessage,
+        timeout: std::time::Duration,
+    ) -> ZmqResult<()> {
+        assert!(message.len() > 1);
+        let peer_id: PeerIdentity = message.pop_front().unwrap().try_into()?;
+        let res = match self.backend.peers.get_async(&peer_id).await {
+            Some(mut peer) => {
+                let fut = peer.send_queue.send(Message::Message(message));
+                async_rt::task::timeout(timeout, fut)
+                    .await
+                    .map_err(|_| ZmqError::Network(io::ErrorKind::TimedOut.into()))??;
+                Ok(())
+            }
+            None => Err(ZmqError::Other("Destination client not found by identity")),
+        };
+        match res {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.backend.peer_disconnected(&peer_id);
+                Err(e)
+            }
         }
     }
 }
