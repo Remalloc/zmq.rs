@@ -112,7 +112,7 @@ impl RouterSocket {
     ) -> ZmqResult<()> {
         assert!(message.len() > 1);
         let peer_id: PeerIdentity = message.pop_front().unwrap().try_into()?;
-        let res = match self.backend.peers.get_async(&peer_id).await {
+        match self.backend.peers.get_async(&peer_id).await {
             Some(mut peer) => {
                 let fut = peer.send_queue.send(Message::Message(message));
                 async_rt::task::timeout(timeout, fut)
@@ -121,13 +121,6 @@ impl RouterSocket {
                 Ok(())
             }
             None => Err(ZmqError::Other("Destination client not found by identity")),
-        };
-        match res {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                self.backend.peer_disconnected(&peer_id);
-                Err(e)
-            }
         }
     }
 }
